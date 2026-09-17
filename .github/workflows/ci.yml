@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (Linux x86, sniper)
+    runs-on: ubuntu-latest
+    container:
+      image: registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/sniper-i386.cmake -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package
+        run: cmake --install build --prefix build/package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm-s3-linux
+          path: build/package
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sm-s3-linux
+          path: package
+
+      - name: Zip
+        run: |
+          version="${GITHUB_REF#refs/tags/}"
+          (cd package && zip -r "../sm-s3-${version}-linux.zip" .)
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sm-s3-*-linux.zip

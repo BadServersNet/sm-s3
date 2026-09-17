@@ -1,0 +1,625 @@
+#include "s3job.h"
+
+#include <algorithm>
+#include <cstring>
+#include <ctime>
+#include <random>
+
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "sigv4.h"
+#include "xml.h"
+
+static const size_t kMaxErrorBody = 64 * 1024;
+static const size_t kMaxListBody = 4 * 1024 * 1024;
+static const long kBackoffBaseMs = 1000;
+static const long kBackoffCapMs = 30000;
+
+static const char *MethodName(S3Op op)
+{
+	switch (op)
+	{
+		case S3Op::Head: return "HEAD";
+		case S3Op::Get: return "GET";
+		case S3Op::Put: return "PUT";
+		case S3Op::Delete: return "DELETE";
+		case S3Op::Copy: return "PUT";
+		case S3Op::List: return "GET";
+	}
+	return "GET";
+}
+
+static bool IsSuccess(long httpStatus)
+{
+	return httpStatus >= 200 && httpStatus < 300;
+}
+
+static long long FileSizeOf(const std::string &path)
+{
+	struct stat info;
+	if (stat(path.c_str(), &info) != 0)
+	{
+		return -1;
+	}
+	return static_cast<long long>(info.st_size);
+}
+
+static void EnsureParentDirectory(const std::string &path)
+{
+	size_t pos = 0;
+	while ((pos = path.find('/', pos + 1)) != std::string::npos)
+	{
+		const std::string parent = path.substr(0, pos);
+		if (parent.empty())
+		{
+			continue;
+		}
+		mkdir(parent.c_str(), 0775);
+	}
+}
+
+static std::string ToLower(const std::string &value)
+{
+	std::string out = value;
+	std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return out;
+}
+
+static std::string Trim(const std::string &value)
+{
+	const size_t start = value.find_first_not_of(" \t\r\n");
+	if (start == std::string::npos)
+	{
+		return "";
+	}
+	const size_t end = value.find_last_not_of(" \t\r\n");
+	return value.substr(start, end - start + 1);
+}
+
+S3Job::S3Job(JobSpec spec, MainThreadQueue *queue)
+	: m_spec(std::move(spec)), m_queue(queue)
+{
+	m_errorBuffer[0] = '\0';
+}
+
+S3Job::~S3Job()
+{
+	CloseFiles();
+	if (m_headerList != nullptr)
+	{
+		curl_slist_free_all(m_headerList);
+	}
+	if (m_easy != nullptr)
+	{
+		curl_easy_cleanup(m_easy);
+	}
+}
+
+bool S3Job::IsRetryDue(std::chrono::steady_clock::time_point now) const
+{
+	return m_waitingForRetry && now >= m_retryAt;
+}
+
+void S3Job::ResetAttemptState()
+{
+	m_responseBody.clear();
+	m_responseHeaders.clear();
+	m_httpStatus = 0;
+	m_errorBuffer[0] = '\0';
+	m_restartedFullBody = false;
+	m_lastProgressValue = -1;
+	m_lastProgressPost = std::chrono::steady_clock::time_point();
+	m_waitingForRetry = false;
+}
+
+bool S3Job::BeginAttempt(CURLM *multi)
+{
+	m_attempt++;
+	ResetAttemptState();
+
+	if (m_cancelRequested)
+	{
+		Finish(S3Status::Cancelled, "cancelled");
+		return false;
+	}
+
+	m_easy = curl_easy_init();
+	if (m_easy == nullptr)
+	{
+		Finish(S3Status::NetworkError, "curl_easy_init failed");
+		return false;
+	}
+
+	if (!OpenFiles())
+	{
+		const std::string error = std::string(strerror(errno)) + ": " + m_spec.filePath;
+		Finish(S3Status::IoError, error);
+		return false;
+	}
+
+	BuildRequest();
+	ApplyCommonOptions();
+	ApplyMethodOptions();
+
+	const CURLMcode added = curl_multi_add_handle(multi, m_easy);
+	if (added != CURLM_OK)
+	{
+		Finish(S3Status::NetworkError, curl_multi_strerror(added));
+		return false;
+	}
+	m_attached = true;
+	return true;
+}
+
+bool S3Job::OpenFiles()
+{
+	if (m_spec.op == S3Op::Put)
+	{
+		m_file = fopen(m_spec.filePath.c_str(), "rb");
+		if (m_file == nullptr)
+		{
+			return false;
+		}
+		const long long size = FileSizeOf(m_spec.filePath);
+		m_uploadSize = size < 0 ? 0 : static_cast<curl_off_t>(size);
+		return true;
+	}
+
+	if (m_spec.op != S3Op::Get)
+	{
+		return true;
+	}
+
+	m_partPath = m_spec.filePath + ".part";
+	EnsureParentDirectory(m_partPath);
+	const long long existing = m_spec.resume ? FileSizeOf(m_partPath) : -1;
+	if (existing > 0)
+	{
+		m_file = fopen(m_partPath.c_str(), "ab");
+		m_resumeOffset = static_cast<curl_off_t>(existing);
+	}
+	else
+	{
+		m_file = fopen(m_partPath.c_str(), "wb");
+		m_resumeOffset = 0;
+	}
+	return m_file != nullptr;
+}
+
+void S3Job::CloseFiles()
+{
+	if (m_file != nullptr)
+	{
+		fclose(m_file);
+		m_file = nullptr;
+	}
+}
+
+void S3Job::BuildRequest()
+{
+	if (m_headerList != nullptr)
+	{
+		curl_slist_free_all(m_headerList);
+		m_headerList = nullptr;
+	}
+
+	const s3::ClientConfig &config = m_spec.config;
+	const bool usePublicUrl = m_spec.op == S3Op::Get && !config.publicUrl.empty();
+	if (usePublicUrl)
+	{
+		const std::string url = s3::TrimSlashes(config.publicUrl) + "/" + s3::EncodeKeyPath(m_spec.key);
+		curl_easy_setopt(m_easy, CURLOPT_URL, url.c_str());
+		if (m_resumeOffset > 0)
+		{
+			const std::string range = "Range: bytes=" + std::to_string(static_cast<long long>(m_resumeOffset)) + "-";
+			m_headerList = curl_slist_append(m_headerList, range.c_str());
+		}
+		curl_easy_setopt(m_easy, CURLOPT_HTTPHEADER, m_headerList);
+		return;
+	}
+
+	s3::SigningInput input;
+	input.method = MethodName(m_spec.op);
+	input.host = s3::BuildHost(config);
+
+	if (m_spec.op == S3Op::List)
+	{
+		input.canonicalUri = s3::BuildBucketUri(config);
+		input.query.emplace_back("list-type", "2");
+		input.query.emplace_back("max-keys", std::to_string(m_spec.maxKeys));
+		if (!m_spec.prefix.empty())
+		{
+			input.query.emplace_back("prefix", m_spec.prefix);
+		}
+		if (!m_spec.continuationToken.empty())
+		{
+			input.query.emplace_back("continuation-token", m_spec.continuationToken);
+		}
+	}
+	else
+	{
+		input.canonicalUri = s3::BuildObjectUri(config, m_spec.key);
+	}
+
+	if (m_spec.op == S3Op::Copy)
+	{
+		const std::string source = "/" + config.bucket + "/" + s3::EncodeKeyPath(m_spec.sourceKey);
+		input.extraHeaders.emplace_back("x-amz-copy-source", source);
+	}
+
+	s3::Credentials credentials;
+	credentials.accessKey = config.accessKey;
+	credentials.secretKey = config.secretKey;
+	credentials.region = config.region;
+
+	std::string amzDate;
+	std::string dateStamp;
+	s3::FormatAmzDate(time(nullptr), amzDate, dateStamp);
+	const s3::SigningOutput signed_ = s3::SignRequest(input, credentials, amzDate, dateStamp);
+
+	std::string url = config.endpoint.scheme + "://" + input.host + input.canonicalUri;
+	const std::string canonicalQuery = s3::BuildCanonicalQuery(input.query);
+	if (!canonicalQuery.empty())
+	{
+		url += "?" + canonicalQuery;
+	}
+	curl_easy_setopt(m_easy, CURLOPT_URL, url.c_str());
+
+	for (const auto &header : signed_.headers)
+	{
+		const std::string line = header.first + ": " + header.second;
+		m_headerList = curl_slist_append(m_headerList, line.c_str());
+	}
+	if (m_spec.op == S3Op::Put)
+	{
+		const std::string contentType = "Content-Type: " + m_spec.contentType;
+		m_headerList = curl_slist_append(m_headerList, contentType.c_str());
+	}
+	if (m_spec.op == S3Op::Get && m_resumeOffset > 0)
+	{
+		const std::string range = "Range: bytes=" + std::to_string(static_cast<long long>(m_resumeOffset)) + "-";
+		m_headerList = curl_slist_append(m_headerList, range.c_str());
+	}
+	curl_easy_setopt(m_easy, CURLOPT_HTTPHEADER, m_headerList);
+}
+
+void S3Job::ApplyCommonOptions()
+{
+	const s3::ClientConfig &config = m_spec.config;
+	curl_easy_setopt(m_easy, CURLOPT_PRIVATE, this);
+	curl_easy_setopt(m_easy, CURLOPT_ERRORBUFFER, m_errorBuffer);
+	curl_easy_setopt(m_easy, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(m_easy, CURLOPT_FOLLOWLOCATION, 0L);
+	curl_easy_setopt(m_easy, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+	curl_easy_setopt(m_easy, CURLOPT_CONNECTTIMEOUT, static_cast<long>(config.connectTimeout));
+	curl_easy_setopt(m_easy, CURLOPT_LOW_SPEED_LIMIT, 1L);
+	curl_easy_setopt(m_easy, CURLOPT_LOW_SPEED_TIME, static_cast<long>(config.timeout));
+	curl_easy_setopt(m_easy, CURLOPT_MAX_SEND_SPEED_LARGE, static_cast<curl_off_t>(config.maxSendSpeed));
+	curl_easy_setopt(m_easy, CURLOPT_MAX_RECV_SPEED_LARGE, static_cast<curl_off_t>(config.maxRecvSpeed));
+	curl_easy_setopt(m_easy, CURLOPT_HEADERFUNCTION, HeaderCallback);
+	curl_easy_setopt(m_easy, CURLOPT_HEADERDATA, this);
+	curl_easy_setopt(m_easy, CURLOPT_WRITEFUNCTION, WriteCallback);
+	curl_easy_setopt(m_easy, CURLOPT_WRITEDATA, this);
+	curl_easy_setopt(m_easy, CURLOPT_XFERINFOFUNCTION, ProgressCallback);
+	curl_easy_setopt(m_easy, CURLOPT_XFERINFODATA, this);
+	curl_easy_setopt(m_easy, CURLOPT_NOPROGRESS, 0L);
+	curl_easy_setopt(m_easy, CURLOPT_USERAGENT, "sm-s3/" SM_S3_VERSION);
+	if (!m_spec.caBundle.empty())
+	{
+		curl_easy_setopt(m_easy, CURLOPT_CAINFO, m_spec.caBundle.c_str());
+	}
+	if (m_spec.verbose)
+	{
+		curl_easy_setopt(m_easy, CURLOPT_VERBOSE, 1L);
+	}
+}
+
+void S3Job::ApplyMethodOptions()
+{
+	switch (m_spec.op)
+	{
+		case S3Op::Head:
+		{
+			curl_easy_setopt(m_easy, CURLOPT_NOBODY, 1L);
+			break;
+		}
+		case S3Op::Put:
+		{
+			curl_easy_setopt(m_easy, CURLOPT_UPLOAD, 1L);
+			curl_easy_setopt(m_easy, CURLOPT_READFUNCTION, ReadCallback);
+			curl_easy_setopt(m_easy, CURLOPT_READDATA, this);
+			curl_easy_setopt(m_easy, CURLOPT_INFILESIZE_LARGE, m_uploadSize);
+			break;
+		}
+		case S3Op::Copy:
+		{
+			curl_easy_setopt(m_easy, CURLOPT_CUSTOMREQUEST, "PUT");
+			break;
+		}
+		case S3Op::Delete:
+		{
+			curl_easy_setopt(m_easy, CURLOPT_CUSTOMREQUEST, "DELETE");
+			break;
+		}
+		case S3Op::Get:
+		case S3Op::List:
+		{
+			curl_easy_setopt(m_easy, CURLOPT_HTTPGET, 1L);
+			break;
+		}
+	}
+}
+
+size_t S3Job::HeaderCallback(char *data, size_t size, size_t count, void *userdata)
+{
+	S3Job *job = static_cast<S3Job *>(userdata);
+	const size_t total = size * count;
+	const std::string line(data, total);
+	const size_t colon = line.find(':');
+	if (colon == std::string::npos)
+	{
+		return total;
+	}
+	const std::string name = ToLower(Trim(line.substr(0, colon)));
+	const std::string value = Trim(line.substr(colon + 1));
+	job->m_responseHeaders[name] = value;
+	return total;
+}
+
+size_t S3Job::WriteCallback(char *data, size_t size, size_t count, void *userdata)
+{
+	S3Job *job = static_cast<S3Job *>(userdata);
+	const size_t total = size * count;
+	long status = 0;
+	curl_easy_getinfo(job->m_easy, CURLINFO_RESPONSE_CODE, &status);
+
+	const bool bodyToFile = job->m_spec.op == S3Op::Get && IsSuccess(status);
+	if (!bodyToFile)
+	{
+		const size_t cap = job->m_spec.op == S3Op::List ? kMaxListBody : kMaxErrorBody;
+		if (job->m_responseBody.size() < cap)
+		{
+			job->m_responseBody.append(data, std::min(total, cap - job->m_responseBody.size()));
+		}
+		return total;
+	}
+
+	const bool serverIgnoredRange = status == 200 && job->m_resumeOffset > 0 && !job->m_restartedFullBody;
+	if (serverIgnoredRange)
+	{
+		job->m_restartedFullBody = true;
+		job->m_resumeOffset = 0;
+		FILE *reopened = freopen(job->m_partPath.c_str(), "wb", job->m_file);
+		if (reopened == nullptr)
+		{
+			job->m_file = nullptr;
+			return 0;
+		}
+		job->m_file = reopened;
+	}
+
+	const size_t written = fwrite(data, 1, total, job->m_file);
+	return written;
+}
+
+size_t S3Job::ReadCallback(char *buffer, size_t size, size_t count, void *userdata)
+{
+	S3Job *job = static_cast<S3Job *>(userdata);
+	if (job->m_file == nullptr)
+	{
+		return CURL_READFUNC_ABORT;
+	}
+	return fread(buffer, 1, size * count, job->m_file);
+}
+
+int S3Job::ProgressCallback(void *userdata, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+	S3Job *job = static_cast<S3Job *>(userdata);
+	if (job->m_cancelRequested)
+	{
+		return 1;
+	}
+
+	if (job->m_spec.op == S3Op::Put)
+	{
+		job->PostProgress(static_cast<long long>(ulnow), static_cast<long long>(ultotal));
+		return 0;
+	}
+	if (job->m_spec.op == S3Op::Get)
+	{
+		const long long offset = static_cast<long long>(job->m_resumeOffset);
+		const long long total = dltotal > 0 ? static_cast<long long>(dltotal) + offset : 0;
+		job->PostProgress(static_cast<long long>(dlnow) + offset, total);
+	}
+	return 0;
+}
+
+void S3Job::PostProgress(long long transferred, long long total)
+{
+	if (transferred <= 0 && total <= 0)
+	{
+		return;
+	}
+	if (transferred == m_lastProgressValue)
+	{
+		return;
+	}
+
+	const auto now = std::chrono::steady_clock::now();
+	const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastProgressPost).count();
+	const bool complete = total > 0 && transferred >= total;
+	const bool percentStep = total > 0 && m_lastProgressValue >= 0 && (transferred - m_lastProgressValue) * 100 >= total;
+	if (!complete && !percentStep && elapsed < 100)
+	{
+		return;
+	}
+
+	m_lastProgressPost = now;
+	m_lastProgressValue = transferred;
+
+	TransferEvent event;
+	event.kind = TransferEvent::Kind::Progress;
+	event.jobId = m_spec.id;
+	event.transferred = transferred;
+	event.total = total;
+	m_queue->Post(std::move(event));
+}
+
+void S3Job::ReleaseCurl(CURLM *multi)
+{
+	if (m_easy == nullptr)
+	{
+		return;
+	}
+	if (m_attached)
+	{
+		curl_multi_remove_handle(multi, m_easy);
+		m_attached = false;
+	}
+	curl_easy_cleanup(m_easy);
+	m_easy = nullptr;
+}
+
+bool S3Job::ShouldRetryStatus(long httpStatus) const
+{
+	return httpStatus == 429 || httpStatus >= 500;
+}
+
+void S3Job::ScheduleRetry()
+{
+	static thread_local std::mt19937 generator { std::random_device {}() };
+	const long exponent = std::min(m_attempt - 1, 10);
+	const long base = std::min(kBackoffCapMs, kBackoffBaseMs * (1L << exponent));
+	std::uniform_int_distribution<long> jitter(-base / 4, base / 4);
+	const long delay = base + jitter(generator);
+	m_retryAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(delay);
+	m_waitingForRetry = true;
+}
+
+std::string S3Job::DescribeHttpError() const
+{
+	std::string code;
+	std::string message;
+	if (s3::ParseErrorBody(m_responseBody, code, message))
+	{
+		if (message.empty())
+		{
+			return code;
+		}
+		return code + ": " + message;
+	}
+	return "HTTP " + std::to_string(m_httpStatus);
+}
+
+bool S3Job::FinalizeDownload(std::string &error)
+{
+	unlink(m_spec.filePath.c_str());
+	if (rename(m_partPath.c_str(), m_spec.filePath.c_str()) != 0)
+	{
+		error = std::string("rename failed: ") + strerror(errno);
+		return false;
+	}
+	return true;
+}
+
+void S3Job::OnAttemptDone(CURLM *multi, CURLcode code)
+{
+	curl_easy_getinfo(m_easy, CURLINFO_RESPONSE_CODE, &m_httpStatus);
+	curl_off_t contentLength = -1;
+	curl_easy_getinfo(m_easy, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &contentLength);
+	const std::string curlError = m_errorBuffer[0] != '\0' ? m_errorBuffer : curl_easy_strerror(code);
+	CloseFiles();
+	ReleaseCurl(multi);
+
+	if (m_cancelRequested)
+	{
+		Finish(S3Status::Cancelled, "cancelled");
+		return;
+	}
+
+	const bool canRetry = m_attempt <= m_spec.config.maxRetries;
+
+	if (code == CURLE_ABORTED_BY_CALLBACK)
+	{
+		Finish(S3Status::Cancelled, "cancelled");
+		return;
+	}
+	if (code == CURLE_WRITE_ERROR || code == CURLE_READ_ERROR)
+	{
+		Finish(S3Status::IoError, curlError);
+		return;
+	}
+	if (code != CURLE_OK)
+	{
+		if (canRetry)
+		{
+			ScheduleRetry();
+			return;
+		}
+		const bool timedOut = code == CURLE_OPERATION_TIMEDOUT;
+		Finish(timedOut ? S3Status::Timeout : S3Status::NetworkError, curlError);
+		return;
+	}
+
+	if (IsSuccess(m_httpStatus))
+	{
+		std::string error;
+		if (m_spec.op == S3Op::Get && !FinalizeDownload(error))
+		{
+			Finish(S3Status::IoError, error);
+			return;
+		}
+		Finish(S3Status::Ok, "");
+		return;
+	}
+
+	if (ShouldRetryStatus(m_httpStatus) && canRetry)
+	{
+		ScheduleRetry();
+		return;
+	}
+
+	if (m_spec.op == S3Op::Get && m_httpStatus >= 400 && m_httpStatus < 500)
+	{
+		unlink(m_partPath.c_str());
+	}
+	Finish(S3Status::HttpError, DescribeHttpError());
+}
+
+void S3Job::Cancel(CURLM *multi)
+{
+	m_cancelRequested = true;
+	CloseFiles();
+	ReleaseCurl(multi);
+	Finish(S3Status::Cancelled, "cancelled");
+}
+
+void S3Job::Finish(S3Status status, const std::string &error)
+{
+	if (m_finished)
+	{
+		return;
+	}
+	m_finished = true;
+	m_waitingForRetry = false;
+
+	TransferEvent event;
+	event.kind = TransferEvent::Kind::Complete;
+	event.jobId = m_spec.id;
+	event.status = status;
+	event.httpStatus = m_httpStatus;
+	event.error = error;
+	event.headers = m_responseHeaders;
+	if (m_spec.op == S3Op::List)
+	{
+		event.body = m_responseBody;
+	}
+
+	const auto lengthHeader = m_responseHeaders.find("content-length");
+	if (lengthHeader != m_responseHeaders.end())
+	{
+		event.contentLength = atoll(lengthHeader->second.c_str());
+	}
+	m_queue->Post(std::move(event));
+}
