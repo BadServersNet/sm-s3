@@ -14,12 +14,29 @@ A SourceMod extension that talks to S3-compatible object storage (Cloudflare R2,
 
 ## Installing
 
-1. Download `sm-s3-<version>-linux.zip` from the releases page and extract it into `csgo/` (or your game directory). It contains `addons/sourcemod/extensions/s3.ext.so`, `addons/sourcemod/scripting/include/s3.inc` and `addons/sourcemod/configs/s3/ca-bundle.crt`.
+1. Download `sm-s3-<version>-linux.zip` from the [releases page](https://github.com/BadServersNet/sm-s3/releases) (or the `sm-s3-linux` artifact of the latest [CI run](https://github.com/BadServersNet/sm-s3/actions)) and extract it into `csgo/` (or your game directory). It contains `addons/sourcemod/extensions/s3.ext.so`, `addons/sourcemod/scripting/include/s3.inc` and `addons/sourcemod/configs/s3/ca-bundle.crt`.
 2. The extension loads automatically when a plugin that includes `<s3>` loads. Check with `sm exts list`.
+3. Plugin authors: copy `s3.inc` into your `scripting/include` directory and `#include <s3>`.
 
 The binary is built in the Steam Runtime 3 (sniper) SDK, so the host needs glibc 2.31 or newer (Debian 11, Ubuntu 20.04 or newer, or any sniper-based container). Only Linux x86 is built at the moment.
 
 Set the environment variable `SM_S3_VERBOSE=1` before starting the server to get libcurl's verbose output on the console.
+
+## API
+
+| Native | What it does |
+|---|---|
+| `S3Client(endpoint, bucket, region, accessKey, secretKey)` | Creates a client. Region is `auto` for R2, `us-east-1` for MinIO/AWS defaults. |
+| `PathStyle`, `ConnectTimeout`, `Timeout`, `MaxRetries`, `MaxSendSpeed`, `MaxRecvSpeed` | Properties. `Timeout` is a stall timeout, so large transfers never time out while progressing. |
+| `SetPublicUrl(baseUrl)` | Downloads fetch `<baseUrl>/<key>` unsigned, e.g. through an R2 custom domain. |
+| `PutFile(key, path, callback, data, contentType, progress)` | Streamed PUT from disk. |
+| `GetFile(key, path, callback, data, progress, resume)` | Streamed download to `<path>.part`, renamed on success, resumable. |
+| `Head(key, ...)`, `Delete(key, ...)`, `Copy(src, dst, ...)` | Single-object operations. |
+| `List(prefix, callback, data, maxKeys, token)` | ListObjectsV2; the callback receives an `S3ObjectList`. |
+| `Cancel(requestId)` | Cancels a request; its callback runs with `S3Status_Cancelled`. |
+| `Presign(key, seconds, url, maxlength, method)` | Builds a presigned URL locally, no network. |
+
+`S3Response` exposes `Status` (`S3Status_Ok`, `HttpError`, `NetworkError`, `Timeout`, `IoError`, `Cancelled`), `HttpStatus`, `ContentLength`, `GetError`, `GetHeader` and `GetETag`.
 
 ## Usage
 
@@ -82,6 +99,14 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix build/package
 ```
+
+## Releasing
+
+Pushing a tag that starts with `v` (for example `v0.1.0`) runs the CI build and attaches `sm-s3-<tag>-linux.zip` to a GitHub release. Bump `SM_S3_VERSION` in `CMakeLists.txt` first so `sm exts list` reports the right version.
+
+## Used by
+
+- [gokz](https://github.com/KZGlobalTeam/gokz) `gokz-replays`: every run, jump and anti-cheat replay is stored in a shared bucket and downloaded on demand for playback.
 
 ## License
 
