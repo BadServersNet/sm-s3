@@ -1,5 +1,9 @@
 # sm-s3
 
+[![CI](https://github.com/BadServersNet/sm-s3/actions/workflows/ci.yml/badge.svg)](https://github.com/BadServersNet/sm-s3/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/BadServersNet/sm-s3)](https://github.com/BadServersNet/sm-s3/releases)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+
 A SourceMod extension that talks to S3-compatible object storage (Cloudflare R2, MinIO, AWS S3, Backblaze B2, ...) with its own HTTP client. It signs requests with AWS Signature V4, streams uploads and downloads straight from and to disk, reports progress, resumes interrupted downloads and retries transient failures, all off the game thread.
 
 ## Features
@@ -21,6 +25,17 @@ A SourceMod extension that talks to S3-compatible object storage (Cloudflare R2,
 The binary is built in the Steam Runtime 3 (sniper) SDK, so the host needs glibc 2.31 or newer (Debian 11, Ubuntu 20.04 or newer, or any sniper-based container). Only Linux x86 is built at the moment.
 
 Set the environment variable `SM_S3_VERBOSE=1` before starting the server to get libcurl's verbose output on the console.
+
+## Providers
+
+| Provider      | Endpoint                             | Region              | `PathStyle`      |
+| ------------- | ------------------------------------ | ------------------- | ---------------- |
+| Cloudflare R2 | `<account>.r2.cloudflarestorage.com` | `auto`              | `true` (default) |
+| AWS S3        | `s3.<region>.amazonaws.com`          | the bucket's region | `false`          |
+| Backblaze B2  | `s3.<region>.backblazeb2.com`        | e.g. `us-west-004`  | `true` (default) |
+| MinIO         | `http://<host>:9000`                 | `us-east-1`         | `true` (default) |
+
+The endpoint defaults to `https://` when no scheme is given. An empty region falls back to `us-east-1`.
 
 ## API
 
@@ -73,9 +88,69 @@ public void OnProgress(S3Client c, int transferred, int total, any data)
 }
 ```
 
+Downloading with resume, listing every page under a prefix, and presigning a link:
+
+```sourcepawn
+void Download(const char[] key, const char[] path)
+{
+	client.GetFile(key, path, OnDownloaded, 0, INVALID_FUNCTION, true);
+}
+
+public void OnDownloaded(S3Client c, S3Response response, any data)
+{
+	if (response.Status == S3Status_Ok)
+	{
+		PrintToServer("downloaded %d bytes", response.ContentLength);
+	}
+}
+
+void ListReplays(const char[] token = "")
+{
+	client.List("replays/", OnListed, 0, 1000, token);
+}
+
+public void OnListed(S3Client c, S3Response response, S3ObjectList objects, const char[] nextToken, any data)
+{
+	if (response.Status != S3Status_Ok)
+	{
+		return;
+	}
+
+	char key[512];
+
+	for (int i = 0; i < objects.Length; i++)
+	{
+		objects.GetKey(i, key, sizeof(key));
+		PrintToServer("%s (%d bytes)", key, objects.GetSize(i));
+	}
+
+	if (nextToken[0] != '\0')
+	{
+		ListReplays(nextToken);
+	}
+}
+
+void ShareLink(const char[] key)
+{
+	char url[1024];
+	client.Presign(key, 3600, url, sizeof(url));
+	PrintToServer("%s", url);
+}
+```
+
 Paths are relative to the game directory, as with SourceMod's own file natives. `GetFile` writes to `<path>.part` and renames it onto `path` when the download completes; call it again with `resume = true` to continue an interrupted download.
 
 Handles passed to callbacks (`S3Response`, `S3ObjectList`) are freed when the callback returns. Deleting an `S3Client` cancels its in-flight requests silently; unloading a plugin cancels that plugin's requests.
+
+## Limits
+
+- Uploads are a single `PUT` (no multipart), so the provider's single-request limit applies (5 GB on AWS S3 and R2).
+- Sizes and progress values are SourcePawn cells and clamp at 2 GB - 1.
+- `List` returns at most 1000 keys per page; follow `nextToken` for more. Response bodies over 4 MB are truncated.
+- Presigned URLs are valid for 1 second to 7 days (`604800`).
+- Retries apply to network errors, timeouts, `429` and `5xx`. Other `4xx` responses fail immediately.
+
+Keep credentials out of public configs: store them in a `FCVAR_PROTECTED` convar or a file the web server does not expose.
 
 See [`pawn/scripting/include/s3.inc`](pawn/scripting/include/s3.inc) for the full API and [`pawn/scripting/s3-example.sp`](pawn/scripting/s3-example.sp) for a console test plugin (`sm_s3_head`, `sm_s3_put`, `sm_s3_get`, `sm_s3_list`, ...).
 
@@ -127,10 +202,6 @@ Separate logical steps with blank lines: after a closing brace, and before `if`,
 ## Releasing
 
 Pushing a tag that starts with `v` (for example `v0.1.0`) runs the CI build and attaches `sm-s3-<tag>-linux.zip` to a GitHub release. Bump `SM_S3_VERSION` in `CMakeLists.txt` first so `sm exts list` reports the right version.
-
-## Used by
-
-- [gokz](https://github.com/KZGlobalTeam/gokz) `gokz-replays`: every run, jump and anti-cheat replay is stored in a shared bucket and downloaded on demand for playback.
 
 ## License
 
