@@ -4,12 +4,11 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <random>
 
-#include <sys/stat.h>
 #include <unistd.h>
 
-#include "sigv4.h"
 #include "text.h"
 #include "xml.h"
 
@@ -46,31 +45,22 @@ static bool IsSuccess(long httpStatus)
 
 static long long FileSizeOf(const std::string &path)
 {
-	struct stat info;
+	std::error_code error;
+	const std::uintmax_t size = std::filesystem::file_size(path, error);
 
-	if (stat(path.c_str(), &info) != 0)
+	if (error)
 	{
 		return -1;
 	}
 
-	return static_cast<long long>(info.st_size);
+	return static_cast<long long>(size);
 }
 
 static void EnsureParentDirectory(const std::string &path)
 {
-	size_t pos = 0;
-
-	while ((pos = path.find('/', pos + 1)) != std::string::npos)
-	{
-		const std::string parent = path.substr(0, pos);
-
-		if (parent.empty())
-		{
-			continue;
-		}
-
-		mkdir(parent.c_str(), 0775);
-	}
+	const std::filesystem::path parent = std::filesystem::path(path).parent_path();
+	std::error_code error;
+	std::filesystem::create_directories(parent, error);
 }
 
 S3Job::S3Job(JobSpec spec, MainThreadQueue *queue) : m_spec(std::move(spec)), m_queue(queue)
@@ -244,48 +234,43 @@ void S3Job::BuildPublicRequest()
 	curl_easy_setopt(m_easy, CURLOPT_HTTPHEADER, m_headerList);
 }
 
-s3::SigningInput S3Job::BuildSigningInput() const
+std::string S3Job::BuildListQuery() const
 {
-	const s3::ClientConfig &config = m_spec.config;
-
-	s3::SigningInput input;
-	input.method = MethodName(m_spec.op);
-	input.host = s3::BuildHost(config);
-
-	input.canonicalUri = s3::BuildObjectUri(config, m_spec.key);
-
-	if (m_spec.op == S3Op::List)
-	{
-		input.canonicalUri = s3::BuildBucketUri(config);
-		input.query = BuildListQuery();
-	}
-
-	if (m_spec.op == S3Op::Copy)
-	{
-		const std::string source = "/" + config.bucket + "/" + s3::EncodeKeyPath(m_spec.sourceKey);
-		input.extraHeaders.emplace_back("x-amz-copy-source", source);
-	}
-
-	return input;
-}
-
-s3::QueryParams S3Job::BuildListQuery() const
-{
-	s3::QueryParams query;
-	query.emplace_back("list-type", "2");
-	query.emplace_back("max-keys", std::to_string(m_spec.maxKeys));
+	std::string query = "list-type=2&max-keys=" + std::to_string(m_spec.maxKeys);
 
 	if (!m_spec.prefix.empty())
 	{
-		query.emplace_back("prefix", m_spec.prefix);
+		query += "&prefix=" + s3::UriEncode(m_spec.prefix, true);
 	}
 
 	if (!m_spec.continuationToken.empty())
 	{
-		query.emplace_back("continuation-token", m_spec.continuationToken);
+		query += "&continuation-token=" + s3::UriEncode(m_spec.continuationToken, true);
 	}
 
 	return query;
+}
+
+std::string S3Job::BuildSignedUrl() const
+{
+	const s3::ClientConfig &config = m_spec.config;
+	const std::string origin = config.endpoint.scheme + "://" + s3::BuildHost(config);
+
+	if (m_spec.op == S3Op::List)
+	{
+		return origin + s3::BuildBucketUri(config) + "?" + BuildListQuery();
+	}
+
+	return origin + s3::BuildObjectUri(config, m_spec.key);
+}
+
+void S3Job::ApplySigning()
+{
+	const s3::ClientConfig &config = m_spec.config;
+	const std::string provider = "aws:amz:" + config.region + ":s3";
+	curl_easy_setopt(m_easy, CURLOPT_AWS_SIGV4, provider.c_str());
+	curl_easy_setopt(m_easy, CURLOPT_USERNAME, config.accessKey.c_str());
+	curl_easy_setopt(m_easy, CURLOPT_PASSWORD, config.secretKey.c_str());
 }
 
 void S3Job::BuildRequest()
@@ -301,31 +286,14 @@ void S3Job::BuildRequest()
 		return;
 	}
 
-	const s3::SigningInput input = BuildSigningInput();
-
-	s3::Credentials credentials;
-	credentials.accessKey = config.accessKey;
-	credentials.secretKey = config.secretKey;
-	credentials.region = config.region;
-
-	std::string amzDate;
-	std::string dateStamp;
-	s3::FormatAmzDate(time(nullptr), amzDate, dateStamp);
-	const s3::SigningOutput signedRequest = s3::SignRequest(input, credentials, amzDate, dateStamp);
-
-	std::string url = config.endpoint.scheme + "://" + input.host + input.canonicalUri;
-	const std::string canonicalQuery = s3::BuildCanonicalQuery(input.query);
-
-	if (!canonicalQuery.empty())
-	{
-		url += "?" + canonicalQuery;
-	}
-
+	const std::string url = BuildSignedUrl();
 	curl_easy_setopt(m_easy, CURLOPT_URL, url.c_str());
+	ApplySigning();
 
-	for (const auto &header : signedRequest.headers)
+	if (m_spec.op == S3Op::Copy)
 	{
-		AppendHeader(header.first + ": " + header.second);
+		const std::string source = "/" + config.bucket + "/" + s3::EncodeKeyPath(m_spec.sourceKey);
+		AppendHeader("x-amz-copy-source: " + source);
 	}
 
 	if (m_spec.op == S3Op::Put)

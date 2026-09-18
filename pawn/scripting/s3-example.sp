@@ -9,7 +9,7 @@ public Plugin myinfo =
 	name = "S3 Example",
 	author = "BuSheezy",
 	description = "Exercises the S3 extension from the server console",
-	version = "0.1.0",
+	version = "0.2.0",
 	url = "https://github.com/BadServersNet/sm-s3"
 };
 
@@ -39,7 +39,6 @@ public void OnPluginStart()
 	RegServerCmd("sm_s3_delete", Command_Delete, "sm_s3_delete <key>");
 	RegServerCmd("sm_s3_copy", Command_Copy, "sm_s3_copy <sourceKey> <destKey>");
 	RegServerCmd("sm_s3_list", Command_List, "sm_s3_list [prefix]");
-	RegServerCmd("sm_s3_presign", Command_Presign, "sm_s3_presign <key> [seconds]");
 	RegServerCmd("sm_s3_cancel", Command_Cancel, "sm_s3_cancel <requestId>");
 
 	AutoExecConfig(true, "s3-example");
@@ -245,29 +244,6 @@ public Action Command_List(int args)
 
 	int id = gH_Client.List(prefix, OnListDone);
 	PrintToServer("s3-example: list \"%s\" (request %d)", prefix, id);
-
-	return Plugin_Handled;
-}
-
-public Action Command_Presign(int args)
-{
-	if (args < 1 || !EnsureClient())
-	{
-		return Plugin_Handled;
-	}
-
-	char key[512];
-	GetCmdArg(1, key, sizeof(key));
-	int seconds = 3600;
-
-	if (args >= 2)
-	{
-		seconds = GetCmdArgInt(2);
-	}
-
-	char url[1024];
-	gH_Client.Presign(key, seconds, url, sizeof(url));
-	PrintToServer("s3-example: %s", url);
 
 	return Plugin_Handled;
 }

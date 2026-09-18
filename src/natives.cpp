@@ -2,10 +2,7 @@
 #include <ctime>
 
 #include "extension.h"
-#include "sigv4.h"
 #include "text.h"
-
-static const cell_t kMaxPresignSeconds = 604800;
 
 static S3ClientObject *ReadClient(IPluginContext *pContext, cell_t handle)
 {
@@ -457,62 +454,6 @@ static cell_t Native_S3Client_Cancel(IPluginContext *pContext, const cell_t *par
 	return g_S3Extension.CancelJob(params[2], pContext->GetIdentity()) ? 1 : 0;
 }
 
-static const char *PresignMethodName(cell_t method)
-{
-	switch (method)
-	{
-		case 1:
-			return "PUT";
-		case 2:
-			return "HEAD";
-		case 3:
-			return "DELETE";
-		default:
-			return "GET";
-	}
-}
-
-static cell_t Native_S3Client_Presign(IPluginContext *pContext, const cell_t *params)
-{
-	S3ClientObject *client = ReadClient(pContext, params[1]);
-
-	if (client == nullptr || !ClientIsConfigured(pContext, client))
-	{
-		return 0;
-	}
-
-	const cell_t expiresSeconds = params[3];
-
-	if (expiresSeconds < 1 || expiresSeconds > kMaxPresignSeconds)
-	{
-		return pContext->ThrowNativeError(
-			"expiresSeconds %d is out of range (1-%d)", expiresSeconds, kMaxPresignSeconds
-		);
-	}
-
-	const s3::ClientConfig &config = client->config;
-
-	s3::SigningInput input;
-	input.method = PresignMethodName(params[6]);
-	input.host = s3::BuildHost(config);
-	input.canonicalUri = s3::BuildObjectUri(config, ReadString(pContext, params[2]));
-
-	s3::Credentials credentials;
-	credentials.accessKey = config.accessKey;
-	credentials.secretKey = config.secretKey;
-	credentials.region = config.region;
-
-	std::string amzDate;
-	std::string dateStamp;
-	s3::FormatAmzDate(time(nullptr), amzDate, dateStamp);
-	const std::string query = s3::PresignQuery(input, credentials, amzDate, dateStamp, expiresSeconds);
-	const std::string url = config.endpoint.scheme + "://" + input.host + input.canonicalUri + "?" + query;
-
-	pContext->StringToLocalUTF8(params[4], params[5], url.c_str(), nullptr);
-
-	return 1;
-}
-
 static cell_t Native_S3Response_GetStatus(IPluginContext *pContext, const cell_t *params)
 {
 	S3ResponseObject *response = ReadResponse(pContext, params[1]);
@@ -690,7 +631,6 @@ const sp_nativeinfo_t g_Natives[] = {
 	{ "S3Client.Copy", Native_S3Client_Copy },
 	{ "S3Client.List", Native_S3Client_List },
 	{ "S3Client.Cancel", Native_S3Client_Cancel },
-	{ "S3Client.Presign", Native_S3Client_Presign },
 	{ "S3Response.Status.get", Native_S3Response_GetStatus },
 	{ "S3Response.HttpStatus.get", Native_S3Response_GetHttpStatus },
 	{ "S3Response.ContentLength.get", Native_S3Response_GetContentLength },

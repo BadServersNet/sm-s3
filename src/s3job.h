@@ -10,7 +10,6 @@
 
 #include "main_thread_queue.h"
 #include "s3client.h"
-#include "sigv4.h"
 
 enum class S3Op
 {
@@ -66,8 +65,9 @@ private:
 	void CloseFiles();
 	void BuildRequest();
 	void BuildPublicRequest();
-	s3::SigningInput BuildSigningInput() const;
-	s3::QueryParams BuildListQuery() const;
+	std::string BuildListQuery() const;
+	std::string BuildSignedUrl() const;
+	void ApplySigning();
 	void ResetHeaderList();
 	void AppendHeader(const std::string &line);
 	void AppendRangeHeader();

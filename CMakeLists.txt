@@ -18,7 +18,7 @@ if(NOT CMAKE_BUILD_TYPE)
 	set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(SM_S3_VERSION "0.1.0" CACHE STRING "Extension version string")
+set(SM_S3_VERSION "0.2.0" CACHE STRING "Extension version string")
 
 set(DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps")
 set(SOURCEMOD_DIR "${DEPS_DIR}/sourcemod")
@@ -83,11 +83,16 @@ set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
 set(CURL_USE_GSSAPI OFF CACHE BOOL "" FORCE)
 set(HTTP_ONLY ON CACHE BOOL "" FORCE)
 set(CURL_DISABLE_ALTSVC ON CACHE BOOL "" FORCE)
-set(CURL_DISABLE_AWS ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_AWS OFF CACHE BOOL "" FORCE)
 set(CURL_DISABLE_COOKIES ON CACHE BOOL "" FORCE)
 set(CURL_DISABLE_DOH ON CACHE BOOL "" FORCE)
 set(CURL_DISABLE_HSTS ON CACHE BOOL "" FORCE)
-set(CURL_DISABLE_HTTP_AUTH ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_HTTP_AUTH OFF CACHE BOOL "" FORCE)
+set(CURL_DISABLE_BASIC_AUTH ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_BEARER_AUTH ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_DIGEST_AUTH ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_KERBEROS_AUTH ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_NEGOTIATE_AUTH ON CACHE BOOL "" FORCE)
 set(CURL_DISABLE_IPFS ON CACHE BOOL "" FORCE)
 set(CURL_DISABLE_MIME ON CACHE BOOL "" FORCE)
 set(CURL_DISABLE_NETRC ON CACHE BOOL "" FORCE)
@@ -106,13 +111,13 @@ add_library(
 	s3
 	SHARED
 	"${SOURCEMOD_DIR}/public/smsdk_ext.cpp"
+	"${DEPS_DIR}/pugixml/src/pugixml.cpp"
 	src/extension.cpp
 	src/natives.cpp
 	src/s3client.cpp
 	src/s3job.cpp
 	src/transfer_thread.cpp
 	src/main_thread_queue.cpp
-	src/sigv4.cpp
 	src/text.cpp
 	src/uri.cpp
 	src/xml.cpp
@@ -139,12 +144,15 @@ target_include_directories(
 		"${SOURCEMOD_DIR}/sourcepawn/include"
 		"${DEPS_DIR}/curl/include"
 		"${DEPS_DIR}/mbedtls/include"
+		"${DEPS_DIR}/pugixml/src"
 )
 
 target_compile_definitions(
 	s3
 	PRIVATE
 		CURL_STATICLIB
+		PUGIXML_NO_XPATH
+		PUGIXML_NO_EXCEPTIONS
 		SM_S3_VERSION="${SM_S3_VERSION}"
 		stricmp=strcasecmp
 		_stricmp=strcasecmp
@@ -206,20 +214,12 @@ add_custom_target(ca_bundle ALL DEPENDS "${CA_BUNDLE}")
 # ---- tests ------------------------------------------------------------------
 enable_testing()
 add_executable(
-	sigv4_test
-	tests/sigv4_test.cpp
-	src/sigv4.cpp
-	src/text.cpp
+	uri_test
+	tests/uri_test.cpp
 	src/uri.cpp
 )
-target_include_directories(
-	sigv4_test
-	PRIVATE
-		src
-		"${DEPS_DIR}/mbedtls/include"
-)
-target_link_libraries(sigv4_test PRIVATE mbedcrypto)
-add_test(NAME sigv4 COMMAND sigv4_test)
+target_include_directories(uri_test PRIVATE src)
+add_test(NAME uri COMMAND uri_test)
 
 # ---- install / package ------------------------------------------------------
 install(TARGETS s3 LIBRARY DESTINATION addons/sourcemod/extensions)

@@ -13,14 +13,6 @@ enum S3Status
 	S3Status_Cancelled,
 };
 
-enum S3Method
-{
-	S3Method_GET = 0,
-	S3Method_PUT,
-	S3Method_HEAD,
-	S3Method_DELETE,
-};
-
 methodmap S3Response < Handle
 {
 	/**
@@ -205,12 +197,6 @@ methodmap S3Client < Handle
 	 * Cancels a request started by this plugin. The callback still runs with S3Status_Cancelled.
 	 */
 	public native bool Cancel(int requestId);
-
-	/**
-	 * Builds a presigned URL for the object without any network access.
-	 * expiresSeconds must be between 1 and 604800 (7 days).
-	 */
-	public native bool Presign(const char[] key, int expiresSeconds, char[] url, int maxlength, S3Method method = S3Method_GET);
 };
 
 public Extension __ext_s3 =
@@ -253,7 +239,6 @@ public void __ext_s3_SetNTVOptional()
 	MarkNativeAsOptional("S3Client.Copy");
 	MarkNativeAsOptional("S3Client.List");
 	MarkNativeAsOptional("S3Client.Cancel");
-	MarkNativeAsOptional("S3Client.Presign");
 	MarkNativeAsOptional("S3Response.Status.get");
 	MarkNativeAsOptional("S3Response.HttpStatus.get");
 	MarkNativeAsOptional("S3Response.ContentLength.get");

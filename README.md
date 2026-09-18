@@ -8,13 +8,13 @@ A SourceMod extension that talks to S3-compatible object storage (Cloudflare R2,
 
 ## Features
 
-- `PutFile`, `GetFile`, `Head`, `Delete`, `Copy`, `List` (ListObjectsV2) and presigned URLs
-- SigV4 signing with `UNSIGNED-PAYLOAD`, path-style or virtual-hosted addressing
+- `PutFile`, `GetFile`, `Head`, `Delete`, `Copy`, `List` (ListObjectsV2)
+- AWS Signature V4 via libcurl with `UNSIGNED-PAYLOAD` for streamed uploads, path-style or virtual-hosted addressing
 - Streamed transfers (memory use is independent of file size), progress callbacks, `Range` resume for downloads
 - Automatic retries with exponential backoff for network errors, timeouts, `429` and `5xx`
 - Readable errors: S3 `<Code>: <Message>` from the response body, or libcurl's description
 - Optional unsigned public base URL for downloads (for example an R2 custom domain)
-- Statically linked libcurl + mbedTLS + zlib; the only runtime dependencies are glibc 2.31+ and SourceMod 1.11+
+- Statically linked libcurl + mbedTLS + zlib + pugixml; the only runtime dependencies are glibc 2.31+ and SourceMod 1.11+
 
 ## Installing
 
@@ -49,7 +49,6 @@ The endpoint defaults to `https://` when no scheme is given. An empty region fal
 | `Head(key, ...)`, `Delete(key, ...)`, `Copy(src, dst, ...)`                            | Single-object operations.                                                                      |
 | `List(prefix, callback, data, maxKeys, token)`                                         | ListObjectsV2; the callback receives an `S3ObjectList`.                                        |
 | `Cancel(requestId)`                                                                    | Cancels a request; its callback runs with `S3Status_Cancelled`.                                |
-| `Presign(key, seconds, url, maxlength, method)`                                        | Builds a presigned URL locally, no network.                                                    |
 
 `S3Response` exposes `Status` (`S3Status_Ok`, `HttpError`, `NetworkError`, `Timeout`, `IoError`, `Cancelled`), `HttpStatus`, `ContentLength`, `GetError`, `GetHeader` and `GetETag`.
 
@@ -88,7 +87,7 @@ public void OnProgress(S3Client c, int transferred, int total, any data)
 }
 ```
 
-Downloading with resume, listing every page under a prefix, and presigning a link:
+Downloading with resume and listing every page under a prefix:
 
 ```sourcepawn
 void Download(const char[] key, const char[] path)
@@ -129,13 +128,6 @@ public void OnListed(S3Client c, S3Response response, S3ObjectList objects, cons
 		ListReplays(nextToken);
 	}
 }
-
-void ShareLink(const char[] key)
-{
-	char url[1024];
-	client.Presign(key, 3600, url, sizeof(url));
-	PrintToServer("%s", url);
-}
 ```
 
 Paths are relative to the game directory, as with SourceMod's own file natives. `GetFile` writes to `<path>.part` and renames it onto `path` when the download completes; call it again with `resume = true` to continue an interrupted download.
@@ -147,7 +139,6 @@ Handles passed to callbacks (`S3Response`, `S3ObjectList`) are freed when the ca
 - Uploads are a single `PUT` (no multipart), so the provider's single-request limit applies (5 GB on AWS S3 and R2).
 - Sizes and progress values are SourcePawn cells and clamp at 2 GB - 1.
 - `List` returns at most 1000 keys per page; follow `nextToken` for more. Response bodies over 4 MB are truncated.
-- Presigned URLs are valid for 1 second to 7 days (`604800`).
 - Retries apply to network errors, timeouts, `429` and `5xx`. Other `4xx` responses fail immediately.
 
 Keep credentials out of public configs: store them in a `FCVAR_PROTECTED` convar or a file the web server does not expose.

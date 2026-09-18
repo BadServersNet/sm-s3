@@ -25,12 +25,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 	clang-tidy --quiet src/*.cpp tests/*.cpp -- \
 		-std=c++17 \
 		-Isrc \
-		-Ideps/sourcemod/public \
-		-Ideps/sourcemod/public/amtl \
-		-Ideps/sourcemod/public/amtl/amtl \
-		-Ideps/sourcemod/sourcepawn/include \
-		-Ideps/curl/include \
-		-Ideps/mbedtls/include \
+		-isystem deps/sourcemod/public \
+		-isystem deps/sourcemod/public/amtl \
+		-isystem deps/sourcemod/public/amtl/amtl \
+		-isystem deps/sourcemod/sourcepawn/include \
+		-isystem deps/curl/include \
+		-isystem deps/mbedtls/include \
+		-isystem deps/pugixml/src \
 		-DCURL_STATICLIB \
 		-DSM_S3_VERSION=\"lint\" \
 		-Dstricmp=strcasecmp \

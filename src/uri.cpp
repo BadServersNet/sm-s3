@@ -1,7 +1,5 @@
 #include "uri.h"
 
-#include <algorithm>
-
 namespace s3
 {
 
@@ -50,35 +48,6 @@ std::string UriEncode(const std::string &input, bool encodeSlash)
 std::string EncodeKeyPath(const std::string &key)
 {
 	return UriEncode(key, false);
-}
-
-std::string BuildCanonicalQuery(const QueryParams &params)
-{
-	QueryParams encoded;
-	encoded.reserve(params.size());
-
-	for (const auto &param : params)
-	{
-		encoded.emplace_back(UriEncode(param.first, true), UriEncode(param.second, true));
-	}
-
-	std::sort(encoded.begin(), encoded.end());
-
-	std::string out;
-
-	for (const auto &param : encoded)
-	{
-		if (!out.empty())
-		{
-			out.push_back('&');
-		}
-
-		out += param.first;
-		out.push_back('=');
-		out += param.second;
-	}
-
-	return out;
 }
 
 Endpoint ParseEndpoint(const std::string &endpoint)
