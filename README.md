@@ -24,17 +24,17 @@ Set the environment variable `SM_S3_VERBOSE=1` before starting the server to get
 
 ## API
 
-| Native | What it does |
-|---|---|
-| `S3Client(endpoint, bucket, region, accessKey, secretKey)` | Creates a client. Region is `auto` for R2, `us-east-1` for MinIO/AWS defaults. |
+| Native                                                                                 | What it does                                                                                   |
+| -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `S3Client(endpoint, bucket, region, accessKey, secretKey)`                             | Creates a client. Region is `auto` for R2, `us-east-1` for MinIO/AWS defaults.                 |
 | `PathStyle`, `ConnectTimeout`, `Timeout`, `MaxRetries`, `MaxSendSpeed`, `MaxRecvSpeed` | Properties. `Timeout` is a stall timeout, so large transfers never time out while progressing. |
-| `SetPublicUrl(baseUrl)` | Downloads fetch `<baseUrl>/<key>` unsigned, e.g. through an R2 custom domain. |
-| `PutFile(key, path, callback, data, contentType, progress)` | Streamed PUT from disk. |
-| `GetFile(key, path, callback, data, progress, resume)` | Streamed download to `<path>.part`, renamed on success, resumable. |
-| `Head(key, ...)`, `Delete(key, ...)`, `Copy(src, dst, ...)` | Single-object operations. |
-| `List(prefix, callback, data, maxKeys, token)` | ListObjectsV2; the callback receives an `S3ObjectList`. |
-| `Cancel(requestId)` | Cancels a request; its callback runs with `S3Status_Cancelled`. |
-| `Presign(key, seconds, url, maxlength, method)` | Builds a presigned URL locally, no network. |
+| `SetPublicUrl(baseUrl)`                                                                | Downloads fetch `<baseUrl>/<key>` unsigned, e.g. through an R2 custom domain.                  |
+| `PutFile(key, path, callback, data, contentType, progress)`                            | Streamed PUT from disk.                                                                        |
+| `GetFile(key, path, callback, data, progress, resume)`                                 | Streamed download to `<path>.part`, renamed on success, resumable.                             |
+| `Head(key, ...)`, `Delete(key, ...)`, `Copy(src, dst, ...)`                            | Single-object operations.                                                                      |
+| `List(prefix, callback, data, maxKeys, token)`                                         | ListObjectsV2; the callback receives an `S3ObjectList`.                                        |
+| `Cancel(requestId)`                                                                    | Cancels a request; its callback runs with `S3Status_Cancelled`.                                |
+| `Presign(key, seconds, url, maxlength, method)`                                        | Builds a presigned URL locally, no network.                                                    |
 
 `S3Response` exposes `Status` (`S3Status_Ok`, `HttpError`, `NetworkError`, `Timeout`, `IoError`, `Cancelled`), `HttpStatus`, `ContentLength`, `GetError`, `GetHeader` and `GetETag`.
 
@@ -99,6 +99,30 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix build/package
 ```
+
+## Formatting and linting
+
+Formatters and linters run in a pinned tooling container (`docker/lint.Dockerfile`), so only Docker is required. Every formatter uses a line width of 120.
+
+```bash
+./scripts/format.sh
+```
+
+```bash
+./scripts/lint.sh
+```
+
+| Files                | Formatter      | Linter                                  |
+| -------------------- | -------------- | --------------------------------------- |
+| C++ (`src`, `tests`) | `clang-format` | `clang-tidy` (warnings are errors)      |
+| CMake                | `gersemi`      |                                         |
+| Shell (`scripts`)    | `shfmt`        | `shellcheck`                            |
+| Markdown, YAML, JSON | `oxfmt`        |                                         |
+| SourcePawn (`pawn`)  |                | `spcomp -E` in CI (warnings are errors) |
+
+`clang-tidy` enforces a cognitive complexity limit of 15 per function. CI runs `scripts/lint.sh` on every push and pull request.
+
+Separate logical steps with blank lines: after a closing brace, and before `if`, `for`, `while`, `switch` and `return`. `clang-format` keeps those blank lines but cannot add them.
 
 ## Releasing
 

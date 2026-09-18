@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(sm-s3 LANGUAGES C CXX)
+project(
+	sm-s3
+	LANGUAGES
+		C
+		CXX
+)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
@@ -31,7 +36,14 @@ if(TARGET zlibstatic)
 else()
 	set(SM_S3_ZLIB_TARGET zlib)
 endif()
-set(ZLIB_INCLUDE_DIR "${DEPS_DIR}/zlib" "${CMAKE_CURRENT_BINARY_DIR}/deps/zlib" CACHE PATH "" FORCE)
+set(
+	ZLIB_INCLUDE_DIR
+	"${DEPS_DIR}/zlib"
+	"${CMAKE_CURRENT_BINARY_DIR}/deps/zlib"
+	CACHE PATH
+	""
+	FORCE
+)
 set(ZLIB_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/deps/zlib/libz.a" CACHE FILEPATH "" FORCE)
 set(ZLIB_FOUND ON CACHE BOOL "" FORCE)
 
@@ -90,7 +102,9 @@ add_subdirectory("${DEPS_DIR}/curl" EXCLUDE_FROM_ALL)
 add_dependencies(libcurl_static ${SM_S3_ZLIB_TARGET})
 
 # ---- extension --------------------------------------------------------------
-add_library(s3 SHARED
+add_library(
+	s3
+	SHARED
 	"${SOURCEMOD_DIR}/public/smsdk_ext.cpp"
 	src/extension.cpp
 	src/natives.cpp
@@ -99,73 +113,91 @@ add_library(s3 SHARED
 	src/transfer_thread.cpp
 	src/main_thread_queue.cpp
 	src/sigv4.cpp
+	src/text.cpp
 	src/uri.cpp
 	src/xml.cpp
 )
 
-set_target_properties(s3 PROPERTIES
-	OUTPUT_NAME "s3.ext"
-	PREFIX ""
-	SUFFIX ".so"
+set_target_properties(
+	s3
+	PROPERTIES
+		OUTPUT_NAME
+			"s3.ext"
+		PREFIX
+			""
+		SUFFIX
+			".so"
 )
 
-target_include_directories(s3 PRIVATE
-	src
-	"${SOURCEMOD_DIR}/public"
-	"${SOURCEMOD_DIR}/public/amtl"
-	"${SOURCEMOD_DIR}/public/amtl/amtl"
-	"${SOURCEMOD_DIR}/sourcepawn/include"
-	"${DEPS_DIR}/curl/include"
-	"${DEPS_DIR}/mbedtls/include"
+target_include_directories(
+	s3
+	PRIVATE
+		src
+		"${SOURCEMOD_DIR}/public"
+		"${SOURCEMOD_DIR}/public/amtl"
+		"${SOURCEMOD_DIR}/public/amtl/amtl"
+		"${SOURCEMOD_DIR}/sourcepawn/include"
+		"${DEPS_DIR}/curl/include"
+		"${DEPS_DIR}/mbedtls/include"
 )
 
-target_compile_definitions(s3 PRIVATE
-	CURL_STATICLIB
-	SM_S3_VERSION="${SM_S3_VERSION}"
-	stricmp=strcasecmp
-	_stricmp=strcasecmp
-	_snprintf=snprintf
-	_vsnprintf=vsnprintf
-	HAVE_STDINT_H
-	GNUC
-	_LINUX
-	POSIX
+target_compile_definitions(
+	s3
+	PRIVATE
+		CURL_STATICLIB
+		SM_S3_VERSION="${SM_S3_VERSION}"
+		stricmp=strcasecmp
+		_stricmp=strcasecmp
+		_snprintf=snprintf
+		_vsnprintf=vsnprintf
+		HAVE_STDINT_H
+		GNUC
+		_LINUX
+		POSIX
 )
 
-target_compile_options(s3 PRIVATE
-	-fno-strict-aliasing
-	-fno-rtti
-	-Wall
-	-Wno-unused
-	-Wno-switch
-	-Wno-non-virtual-dtor
-	-Wno-overloaded-virtual
-	-Wno-unknown-pragmas
-	-Wno-class-memaccess
-	-msse
+target_compile_options(
+	s3
+	PRIVATE
+		-fno-strict-aliasing
+		-fno-rtti
+		-Wall
+		-Wno-unused
+		-Wno-switch
+		-Wno-non-virtual-dtor
+		-Wno-overloaded-virtual
+		-Wno-unknown-pragmas
+		-Wno-class-memaccess
+		-msse
 )
 
-target_link_libraries(s3 PRIVATE
-	libcurl_static
-	mbedtls
-	mbedx509
-	mbedcrypto
-	${SM_S3_ZLIB_TARGET}
-	pthread
-	dl
+target_link_libraries(
+	s3
+	PRIVATE
+		libcurl_static
+		mbedtls
+		mbedx509
+		mbedcrypto
+		${SM_S3_ZLIB_TARGET}
+		pthread
+		dl
 )
 
-target_link_options(s3 PRIVATE
-	-static-libgcc
-	-static-libstdc++
-	-Wl,--no-undefined
+target_link_options(
+	s3
+	PRIVATE
+		-static-libgcc
+		-static-libstdc++
+		-Wl,--no-undefined
 )
 
 # ---- CA bundle --------------------------------------------------------------
 set(CA_BUNDLE "${CMAKE_CURRENT_BINARY_DIR}/ca-bundle.crt")
 add_custom_command(
-	OUTPUT "${CA_BUNDLE}"
-	COMMAND perl "${DEPS_DIR}/curl/scripts/mk-ca-bundle.pl" -q "${CA_BUNDLE}"
+	OUTPUT
+		"${CA_BUNDLE}"
+	COMMAND
+		perl "${DEPS_DIR}/curl/scripts/mk-ca-bundle.pl" -q "${CA_BUNDLE}"
 	COMMENT "Generating CA bundle"
 	VERBATIM
 )
@@ -173,12 +205,19 @@ add_custom_target(ca_bundle ALL DEPENDS "${CA_BUNDLE}")
 
 # ---- tests ------------------------------------------------------------------
 enable_testing()
-add_executable(sigv4_test
+add_executable(
+	sigv4_test
 	tests/sigv4_test.cpp
 	src/sigv4.cpp
+	src/text.cpp
 	src/uri.cpp
 )
-target_include_directories(sigv4_test PRIVATE src "${DEPS_DIR}/mbedtls/include")
+target_include_directories(
+	sigv4_test
+	PRIVATE
+		src
+		"${DEPS_DIR}/mbedtls/include"
+)
 target_link_libraries(sigv4_test PRIVATE mbedcrypto)
 add_test(NAME sigv4 COMMAND sigv4_test)
 

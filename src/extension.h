@@ -42,6 +42,8 @@ struct JobRecord
 	IChangeableForward *completed = nullptr;
 	IChangeableForward *progress = nullptr;
 	cell_t data = 0;
+	bool dispatching = false;
+	bool dropped = false;
 };
 
 class S3Extension : public SDKExtension, public IHandleTypeDispatch, public IPluginsListener
@@ -58,10 +60,15 @@ public:
 	void HandleEvent(const TransferEvent &event);
 
 	const std::string &CaBundlePath() const { return m_caBundlePath; }
+
 	bool Verbose() const { return m_verbose; }
 
 private:
+	using JobMap = std::unordered_map<int, JobRecord>;
+
 	void CancelJobsForClient(Handle_t clientHandle);
+	JobMap::iterator DropJob(JobMap::iterator it);
+	void HandleProgress(JobRecord &record, const TransferEvent &event);
 	void ReleaseRecord(JobRecord &record);
 	void DispatchProgress(const JobRecord &record, const TransferEvent &event);
 	void DispatchComplete(JobRecord &record, const TransferEvent &event);
@@ -70,7 +77,7 @@ private:
 	void FreeOwnedHandle(Handle_t handle, IdentityToken_t *owner);
 	void DetectCaBundle();
 
-	std::unordered_map<int, JobRecord> m_jobs;
+	JobMap m_jobs;
 	int m_nextJobId = 1;
 	std::string m_caBundlePath;
 	bool m_verbose = false;
@@ -90,9 +97,11 @@ static inline cell_t ClampToCell(long long value)
 	{
 		return 0x7FFFFFFF;
 	}
+
 	if (value < -0x80000000LL)
 	{
 		return static_cast<cell_t>(-0x80000000LL);
 	}
+
 	return static_cast<cell_t>(value);
 }

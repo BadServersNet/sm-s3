@@ -44,7 +44,15 @@ std::string HmacSha256(const std::string &key, const std::string &data);
 std::string ToHex(const std::string &bytes);
 void FormatAmzDate(time_t now, std::string &amzDate, std::string &dateStamp);
 
-SigningOutput SignRequest(const SigningInput &input, const Credentials &credentials, const std::string &amzDate, const std::string &dateStamp);
-std::string PresignQuery(const SigningInput &input, const Credentials &credentials, const std::string &amzDate, const std::string &dateStamp, int expiresSeconds);
+SigningOutput SignRequest(
+	const SigningInput &input, const Credentials &credentials, const std::string &amzDate, const std::string &dateStamp
+);
+std::string PresignQuery(
+	const SigningInput &input,
+	const Credentials &credentials,
+	const std::string &amzDate,
+	const std::string &dateStamp,
+	int expiresSeconds
+);
 
 }

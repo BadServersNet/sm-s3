@@ -208,6 +208,7 @@ methodmap S3Client < Handle
 
 	/**
 	 * Builds a presigned URL for the object without any network access.
+	 * expiresSeconds must be between 1 and 604800 (7 days).
 	 */
 	public native bool Presign(const char[] key, int expiresSeconds, char[] url, int maxlength, S3Method method = S3Method_GET);
 };

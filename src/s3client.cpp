@@ -9,6 +9,7 @@ std::string BuildHost(const ClientConfig &config)
 	{
 		return config.endpoint.host;
 	}
+
 	return config.bucket + "." + config.endpoint.host;
 }
 
@@ -18,6 +19,7 @@ std::string BuildBucketUri(const ClientConfig &config)
 	{
 		return "/" + config.bucket + "/";
 	}
+
 	return "/";
 }
 

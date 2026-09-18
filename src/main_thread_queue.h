@@ -43,9 +43,11 @@ public:
 	std::vector<TransferEvent> Drain();
 	void SetEnabled(bool enabled);
 
+	bool HasEvents() const { return m_hasEvents; }
+
 private:
 	std::mutex m_mutex;
 	std::vector<TransferEvent> m_events;
-	bool m_scheduled = false;
+	std::atomic<bool> m_hasEvents { false };
 	std::atomic<bool> m_enabled { true };
 };

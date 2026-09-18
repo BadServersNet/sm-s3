@@ -10,6 +10,7 @@
 
 #include "main_thread_queue.h"
 #include "s3client.h"
+#include "sigv4.h"
 
 enum class S3Op
 {
@@ -45,10 +46,15 @@ public:
 	~S3Job();
 
 	int Id() const { return m_spec.id; }
+
 	CURL *Easy() const { return m_easy; }
+
 	bool IsFinished() const { return m_finished; }
+
 	bool IsWaitingForRetry() const { return m_waitingForRetry; }
+
 	bool IsRetryDue(std::chrono::steady_clock::time_point now) const;
+
 	std::chrono::steady_clock::time_point RetryAt() const { return m_retryAt; }
 
 	bool BeginAttempt(CURLM *multi);
@@ -59,6 +65,15 @@ private:
 	bool OpenFiles();
 	void CloseFiles();
 	void BuildRequest();
+	void BuildPublicRequest();
+	s3::SigningInput BuildSigningInput() const;
+	s3::QueryParams BuildListQuery() const;
+	void ResetHeaderList();
+	void AppendHeader(const std::string &line);
+	void AppendRangeHeader();
+	void HandleTransportFailure(CURLcode code, const std::string &curlError, bool canRetry);
+	void HandleHttpFailure(bool canRetry);
+	void HandleHttpSuccess();
 	void ApplyCommonOptions();
 	void ApplyMethodOptions();
 	bool ShouldRetryStatus(long httpStatus) const;
@@ -73,7 +88,8 @@ private:
 	static size_t WriteCallback(char *data, size_t size, size_t count, void *userdata);
 	static size_t ReadCallback(char *buffer, size_t size, size_t count, void *userdata);
 	static size_t HeaderCallback(char *data, size_t size, size_t count, void *userdata);
-	static int ProgressCallback(void *userdata, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow);
+	static int
+	ProgressCallback(void *userdata, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow);
 
 	JobSpec m_spec;
 	MainThreadQueue *m_queue;

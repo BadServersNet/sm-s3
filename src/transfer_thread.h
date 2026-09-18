@@ -20,8 +20,9 @@ public:
 
 private:
 	void Run();
-	void AdmitIncoming();
-	void ApplyCancellations();
+	void TakePending(std::vector<std::unique_ptr<S3Job>> &incoming, std::vector<int> &cancelRequests);
+	void AdmitIncoming(std::vector<std::unique_ptr<S3Job>> &incoming);
+	void ApplyCancellations(const std::vector<int> &cancelRequests);
 	void ReapCompleted();
 	void StartDueRetries();
 	long ComputeWaitMs() const;

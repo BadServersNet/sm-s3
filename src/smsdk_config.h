@@ -1,5 +1,4 @@
-#ifndef _INCLUDE_SOURCEMOD_EXTENSION_CONFIG_H_
-#define _INCLUDE_SOURCEMOD_EXTENSION_CONFIG_H_
+#pragma once
 
 #define SMEXT_CONF_NAME "S3"
 #define SMEXT_CONF_DESCRIPTION "S3-compatible object storage client"
@@ -16,5 +15,3 @@
 #define SMEXT_ENABLE_HANDLESYS
 #define SMEXT_ENABLE_LIBSYS
 #define SMEXT_ENABLE_PLUGINSYS
-
-#endif

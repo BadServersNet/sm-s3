@@ -70,11 +70,13 @@ static void RebuildClient()
 	if (endpoint[0] == '\0' || bucket[0] == '\0')
 	{
 		LogMessage("s3-example: set s3_example_endpoint and s3_example_bucket to enable the client");
+
 		return;
 	}
 
 	gH_Client = new S3Client(endpoint, bucket, region, accessKey, secretKey);
 	gH_Client.PathStyle = gCV_PathStyle.BoolValue;
+
 	if (publicUrl[0] != '\0')
 	{
 		gH_Client.SetPublicUrl(publicUrl);
@@ -87,12 +89,16 @@ static bool EnsureClient()
 	{
 		return true;
 	}
+
 	RebuildClient();
+
 	if (gH_Client == null)
 	{
 		PrintToServer("s3-example: client is not configured");
+
 		return false;
 	}
+
 	return true;
 }
 
@@ -116,8 +122,10 @@ public void OnProgress(S3Client client, int transferred, int total, any data)
 	if (total > 0)
 	{
 		PrintToServer("s3-example: progress %d / %d (%d%%)", transferred, total, transferred * 100 / total);
+
 		return;
 	}
+
 	PrintToServer("s3-example: progress %d bytes", transferred);
 }
 
@@ -126,12 +134,14 @@ public void OnListDone(S3Client client, S3Response response, S3ObjectList object
 	PrintResponse("list", response);
 	char key[512];
 	char etag[128];
+
 	for (int i = 0; i < objects.Length; i++)
 	{
 		objects.GetKey(i, key, sizeof(key));
 		objects.GetETag(i, etag, sizeof(etag));
 		PrintToServer("  %s  %d bytes  modified=%d  etag=%s", key, objects.GetSize(i), objects.GetLastModified(i), etag);
 	}
+
 	if (nextToken[0] != '\0')
 	{
 		PrintToServer("  next token: %s", nextToken);
@@ -144,10 +154,12 @@ public Action Command_Head(int args)
 	{
 		return Plugin_Handled;
 	}
+
 	char key[512];
 	GetCmdArg(1, key, sizeof(key));
 	int id = gH_Client.Head(key, OnRequestDone);
 	PrintToServer("s3-example: head %s (request %d)", key, id);
+
 	return Plugin_Handled;
 }
 
@@ -157,12 +169,14 @@ public Action Command_Put(int args)
 	{
 		return Plugin_Handled;
 	}
+
 	char key[512];
 	char path[PLATFORM_MAX_PATH];
 	GetCmdArg(1, key, sizeof(key));
 	GetCmdArg(2, path, sizeof(path));
 	int id = gH_Client.PutFile(key, path, OnRequestDone, 0, "application/octet-stream", OnProgress);
 	PrintToServer("s3-example: put %s <- %s (request %d)", key, path, id);
+
 	return Plugin_Handled;
 }
 
@@ -172,12 +186,14 @@ public Action Command_Get(int args)
 	{
 		return Plugin_Handled;
 	}
+
 	char key[512];
 	char path[PLATFORM_MAX_PATH];
 	GetCmdArg(1, key, sizeof(key));
 	GetCmdArg(2, path, sizeof(path));
 	int id = gH_Client.GetFile(key, path, OnRequestDone, 0, OnProgress);
 	PrintToServer("s3-example: get %s -> %s (request %d)", key, path, id);
+
 	return Plugin_Handled;
 }
 
@@ -187,10 +203,12 @@ public Action Command_Delete(int args)
 	{
 		return Plugin_Handled;
 	}
+
 	char key[512];
 	GetCmdArg(1, key, sizeof(key));
 	int id = gH_Client.Delete(key, OnRequestDone);
 	PrintToServer("s3-example: delete %s (request %d)", key, id);
+
 	return Plugin_Handled;
 }
 
@@ -200,12 +218,14 @@ public Action Command_Copy(int args)
 	{
 		return Plugin_Handled;
 	}
+
 	char source[512];
 	char dest[512];
 	GetCmdArg(1, source, sizeof(source));
 	GetCmdArg(2, dest, sizeof(dest));
 	int id = gH_Client.Copy(source, dest, OnRequestDone);
 	PrintToServer("s3-example: copy %s -> %s (request %d)", source, dest, id);
+
 	return Plugin_Handled;
 }
 
@@ -215,13 +235,17 @@ public Action Command_List(int args)
 	{
 		return Plugin_Handled;
 	}
+
 	char prefix[512];
+
 	if (args >= 1)
 	{
 		GetCmdArg(1, prefix, sizeof(prefix));
 	}
+
 	int id = gH_Client.List(prefix, OnListDone);
 	PrintToServer("s3-example: list \"%s\" (request %d)", prefix, id);
+
 	return Plugin_Handled;
 }
 
@@ -231,16 +255,20 @@ public Action Command_Presign(int args)
 	{
 		return Plugin_Handled;
 	}
+
 	char key[512];
 	GetCmdArg(1, key, sizeof(key));
 	int seconds = 3600;
+
 	if (args >= 2)
 	{
 		seconds = GetCmdArgInt(2);
 	}
+
 	char url[1024];
 	gH_Client.Presign(key, seconds, url, sizeof(url));
 	PrintToServer("s3-example: %s", url);
+
 	return Plugin_Handled;
 }
 
@@ -250,8 +278,10 @@ public Action Command_Cancel(int args)
 	{
 		return Plugin_Handled;
 	}
+
 	int id = GetCmdArgInt(1);
 	bool cancelled = gH_Client.Cancel(id);
 	PrintToServer("s3-example: cancel %d -> %s", id, cancelled ? "ok" : "not found");
+
 	return Plugin_Handled;
 }
